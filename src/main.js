@@ -281,7 +281,9 @@ function paintGeometry(geometry) {
     const mix = i % 3 === 0 ? baseColor : highlight;
     colors.push(mix.r, mix.g, mix.b);
   }
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const attr = new THREE.Float32BufferAttribute(colors, 3);
+  geometry.setAttribute('color', attr);
+  geometry.userData.baseColors = Float32Array.from(attr.array);
 }
 
 function createBrick(length, height, width) {
@@ -413,7 +415,10 @@ function applyFalloff() {
     meta.glow.userData.baseOpacity = baseOpacity;
     meta.glow.userData.intensity = effectiveNorm;
     meta.glow.visible = baseOpacity > 0.01;
+    meta.colorIntensity = effectiveNorm;
   });
+
+  bricksMeta.forEach(meta => updateBrickColors(meta));
 }
 
 function updatePointer(event) {
@@ -498,6 +503,27 @@ function animateVfx() {
   bloomPass.strength = vfxParams.bloomStrength;
   bloomPass.threshold = vfxParams.bloomThreshold;
   bloomPass.radius = vfxParams.bloomRadius;
+}
+
+function updateBrickColors(meta) {
+  const mesh = meta.object.children.find(c => c.isMesh);
+  if (!mesh) return;
+  const geo = mesh.geometry;
+  const base = geo.userData.baseColors;
+  const attr = geo.getAttribute('color');
+  if (!base || !attr) return;
+  const intensity = THREE.MathUtils.clamp((meta.colorIntensity || 0) * 3.0, 0, 1);
+  const red = new THREE.Color(1, 0, 0);
+  for (let i = 0; i < attr.count; i += 1) {
+    const bi = i * 3;
+    const br = base[bi];
+    const bg = base[bi + 1];
+    const bb = base[bi + 2];
+    attr.array[bi] = THREE.MathUtils.lerp(br, red.r, intensity);
+    attr.array[bi + 1] = THREE.MathUtils.lerp(bg, red.g, intensity);
+    attr.array[bi + 2] = THREE.MathUtils.lerp(bb, red.b, intensity);
+  }
+  attr.needsUpdate = true;
 }
 
 function addCurvePanel(folder) {
