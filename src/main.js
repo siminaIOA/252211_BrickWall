@@ -117,21 +117,16 @@ const curveBounds = { xMin: 0, xMax: 1, zMin: 0, zMax: 1 };
 const curveUI = { canvas: null, ctx: null, padding: 16, width: 340, height: 200, dragging: null };
 const controlPointHelpers = [];
 
-const attractor = new THREE.Mesh(
-  new THREE.SphereGeometry(0.16, 32, 32),
-  new THREE.MeshPhysicalMaterial({
-    color: 0xff1a1a,
-    emissive: 0xff1a1a,
-    emissiveIntensity: 1.0,
-    roughness: 0.2,
-    transmission: 0.5,
-    thickness: 1.2,
-    transparent: true,
-    opacity: 0.95,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.18
-  })
-);
+const attractorMaterial = new THREE.MeshStandardMaterial({
+  color: 0xff1a1a,
+  emissive: 0xff1a1a,
+  emissiveIntensity: 8.0,
+  roughness: 0.25,
+  metalness: 0.0
+});
+attractorMaterial.toneMapped = false;
+
+const attractor = new THREE.Mesh(new THREE.SphereGeometry(0.16, 32, 32), attractorMaterial);
 attractor.castShadow = true;
 scene.add(attractor);
 
@@ -149,7 +144,7 @@ let rowUnitHeight = params.wallHeight / params.rows;
 let lastRows = params.rows;
 
 const vfxParams = {
-  bloomStrength: 0.1,
+  bloomStrength: 0.3,
   bloomThreshold: 0.08,
   bloomRadius: 1.0,
   glowSpeed: 1.25,
@@ -177,7 +172,7 @@ addCurvePanel(curveFolder);
 curveFolder.open();
 
 const vfxFolder = gui.addFolder('VFX Settings');
-vfxFolder.add(vfxParams, 'bloomStrength', 0, 0.5, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
+vfxFolder.add(vfxParams, 'bloomStrength', 0, 1, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
 vfxFolder.add(vfxParams, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(() => bloomPass.threshold = vfxParams.bloomThreshold);
 vfxFolder.add(vfxParams, 'bloomRadius', 0, 2, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
 vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 10, 0.05).name('Glow Speed');
@@ -553,8 +548,8 @@ function animateVfx() {
   const glowPulse = vfxParams.glowIntensity * pulse;
   brickMaterial.emissiveIntensity = 0.06;
   const vfxActive = params.falloff > 0;
-  const attractorBase = vfxActive ? 1.2 : 0.15;
-  const attractorPulse = vfxActive ? 3.5 : 0;
+  const attractorBase = 8.0;
+  const attractorPulse = vfxActive ? 4.5 : 0;
   attractor.material.emissiveIntensity = attractorBase + glowPulse * attractorPulse;
   bricksMeta.forEach(meta => {
     if (meta.glow && meta.glow.visible) {
