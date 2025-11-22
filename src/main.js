@@ -80,9 +80,14 @@ scene.add(spotLight);
 scene.add(spotLight.target);
 
 const gradientTexture = createGradientTexture();
+const brickTexture = createBrickTexture(renderer.capabilities.getMaxAnisotropy?.() || 8);
+const brickBumpTexture = createBrickBumpTexture();
 const brickMaterial = new THREE.MeshToonMaterial({
-  color: 0xf6f7fa,
+  color: 0xffffff,
   vertexColors: true,
+  map: brickTexture,
+  bumpMap: brickBumpTexture,
+  bumpScale: 0.35,
   gradientMap: gradientTexture,
   emissive: new THREE.Color(0x90a4ff),
   emissiveIntensity: 0.06
@@ -137,7 +142,8 @@ const params = {
   wallHeight: 3,
   gap: 0.0,
   rows: 10,
-  falloff: 0.15
+  falloff: 0.15,
+  horizontalGap: 0.0
 };
 let rowUnitHeight = params.wallHeight / params.rows;
 let lastRows = params.rows;
@@ -157,6 +163,7 @@ wallFolder.add(params, 'wallLength', 2, 20, 0.1).name('Wall Length').onChange(re
 wallFolder.add(params, 'wallWidth', 0.2, 0.8, 0.01).name('Wall Width').onChange(rebuildWall);
 wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(onWallHeightChange);
 wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Vertical Gap (Y)').onChange(rebuildWall);
+wallFolder.add(params, 'horizontalGap', 0.0, 0.15, 0.005).name('Horizontal Gap (X)').onChange(rebuildWall);
 wallFolder.add(params, 'rows', 2, 30, 1).name('Rows').onChange(onRowsChange);
 wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
   updateAttractor();
@@ -235,6 +242,65 @@ function createGradientTexture() {
   texture.minFilter = THREE.NearestFilter;
   texture.magFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
+  return texture;
+}
+
+function createBrickTexture(anisotropy = 8) {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#c95333';
+  ctx.fillRect(0, 0, size, size);
+
+  // subtle noise speckles
+  const speckles = size * 60;
+  for (let i = 0; i < speckles; i += 1) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const alpha = 0.1 + Math.random() * 0.2;
+    ctx.fillStyle = `rgba(85,40,25,${alpha})`;
+    ctx.fillRect(x, y, 1.2 + Math.random() * 1.5, 1.2 + Math.random() * 1.5);
+  }
+
+  // soft vertical shading
+  const grad = ctx.createLinearGradient(0, 0, 0, size);
+  grad.addColorStop(0, 'rgba(0,0,0,0.05)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.05)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1, 1);
+  texture.anisotropy = anisotropy;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createBrickBumpTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#808080'; // neutral bump
+  ctx.fillRect(0, 0, size, size);
+
+  const speckles = size * 120;
+  for (let i = 0; i < speckles; i += 1) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const depth = 90 + Math.random() * 130; // 0-255
+    const shade = depth | 0;
+    ctx.fillStyle = `rgb(${shade},${shade},${shade})`;
+    ctx.fillRect(x, y, 1.5 + Math.random() * 1.5, 1.5 + Math.random() * 1.5);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1, 1);
+  texture.needsUpdate = true;
   return texture;
 }
 
@@ -323,7 +389,8 @@ function rebuildWall() {
   const curveLength = Math.max(curve.getLength(), 0.0001);
   const columns = Math.max(2, Math.ceil(curveLength / params.brickLength));
   const segmentLength = curveLength / columns;
-  const brickLength = segmentLength * 1.01; // tiny overhang to eliminate gaps
+  const horizontalScale = Math.max(0.001, 1 - params.horizontalGap);
+  const brickLength = segmentLength * 1.01 * horizontalScale; // tiny overhang to eliminate gaps
   const rowHeight = params.wallHeight / params.rows;
   const brickHeight = Math.max(0.05, rowHeight - params.gap);
 
