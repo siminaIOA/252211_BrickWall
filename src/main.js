@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import GUI from 'lil-gui';
 
 const root = document.getElementById('app');
@@ -15,10 +18,16 @@ root.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x080b11);
+scene.fog = new THREE.Fog(0x080b11, 40, 140);
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
 camera.position.set(7, 5, 10);
 scene.add(camera);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.8, 0.2);
+composer.addPass(bloomPass);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -26,16 +35,21 @@ controls.maxPolarAngle = Math.PI * 0.48;
 controls.target.set(0, 1.2, 0);
 controls.update();
 
-const groundMaterial = new THREE.MeshStandardMaterial({
-  color: 0x060709,
-  roughness: 0.85,
-  metalness: 0.1
-});
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.01;
-ground.receiveShadow = true;
-scene.add(ground);
+const shadowCatcher = new THREE.Mesh(
+  new THREE.PlaneGeometry(500, 500),
+  new THREE.ShadowMaterial({ opacity: 0.25 })
+);
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.position.y = -0.01;
+shadowCatcher.receiveShadow = true;
+scene.add(shadowCatcher);
+
+const grid = new THREE.GridHelper(500, 200, 0x4a4a4a, 0x4a4a4a);
+grid.position.y = 0.001;
+grid.material.opacity = 0.24;
+grid.material.transparent = true;
+grid.material.depthWrite = false;
+scene.add(grid);
 
 const hemiLight = new THREE.HemisphereLight(0xf8f6f1, 0x10131a, 1.35);
 scene.add(hemiLight);
@@ -66,7 +80,9 @@ const gradientTexture = createGradientTexture();
 const brickMaterial = new THREE.MeshToonMaterial({
   color: 0xf6f7fa,
   vertexColors: true,
-  gradientMap: gradientTexture
+  gradientMap: gradientTexture,
+  emissive: new THREE.Color(0x90a4ff),
+  emissiveIntensity: 0.06
 });
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x9ea4b5 });
 
@@ -83,27 +99,22 @@ const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 let isDraggingAttractor = false;
 
 const controlPoints = [
-  new THREE.Vector3(-4, 0, -1.5),
-  new THREE.Vector3(-1, 0, 1.5),
-  new THREE.Vector3(1.5, 0, -0.2),
-  new THREE.Vector3(4.5, 0, 1.2)
+  new THREE.Vector3(0.1, 0, 0.45),
+  new THREE.Vector3(0.32, 0, 0.55),
+  new THREE.Vector3(0.64, 0, 0.42),
+  new THREE.Vector3(0.9, 0, 0.58)
 ];
-const controlPointHelpers = controlPoints.map(() => {
-  const helper = new THREE.Mesh(
-    new THREE.SphereGeometry(0.12, 16, 16),
-    new THREE.MeshStandardMaterial({ color: 0x5ec8ff, emissive: 0x07263a })
-  );
-  helper.castShadow = true;
-  helper.receiveShadow = false;
-  scene.add(helper);
-  return helper;
-});
+let scaledControlPoints = controlPoints.map(pt => pt.clone());
+const curveBounds = { xMin: 0, xMax: 1, zMin: 0, zMax: 1 };
+const curveUI = { canvas: null, ctx: null, padding: 16, width: 340, height: 200, dragging: null };
+const controlPointHelpers = [];
 
 const attractor = new THREE.Mesh(
   new THREE.SphereGeometry(0.16, 32, 32),
   new THREE.MeshPhysicalMaterial({
     color: 0xff1a1a,
-    emissive: 0x3b0000,
+    emissive: 0xff1a1a,
+    emissiveIntensity: 1.0,
     roughness: 0.2,
     transmission: 0.5,
     thickness: 1.2,
@@ -121,12 +132,20 @@ const params = {
   wallLength: 8,
   wallWidth: 0.35,
   wallHeight: 3,
-  gap: 0.04,
+  gap: 0.0,
   rows: 10,
   falloff: 0
 };
 let rowUnitHeight = params.wallHeight / params.rows;
 let lastRows = params.rows;
+
+const vfxParams = {
+  bloomStrength: 0.1,
+  bloomThreshold: 0.08,
+  bloomRadius: 1.0,
+  glowSpeed: 1.25,
+  glowIntensity: 0.55
+};
 
 const gui = new GUI({ title: 'Parametric Brick Wall' });
 const wallFolder = gui.addFolder('Wall Parameters');
@@ -134,7 +153,7 @@ wallFolder.add(params, 'brickLength', 0.2, 1.2, 0.02).name('Brick Length').onCha
 wallFolder.add(params, 'wallLength', 2, 20, 0.1).name('Wall Length').onChange(rebuildWall);
 wallFolder.add(params, 'wallWidth', 0.2, 0.8, 0.01).name('Wall Width').onChange(rebuildWall);
 wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(onWallHeightChange);
-wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Brick Gap').onChange(rebuildWall);
+wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Vertical Gap (Y)').onChange(rebuildWall);
 wallFolder.add(params, 'rows', 2, 30, 1).name('Rows').onChange(onRowsChange);
 wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
   updateAttractor();
@@ -142,26 +161,27 @@ wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
 });
 wallFolder.open();
 
-const curveFolder = gui.addFolder('Curve Control');
+const curveFolder = gui.addFolder('Catmull-Rom Curve');
 curveFolder.domElement.style.marginTop = '8px';
-controlPoints.forEach((point, index) => {
-  const pointFolder = curveFolder.addFolder(`Point ${index + 1}`);
-  pointFolder.add(point, 'x', -12, 12, 0.05).name('X').onChange(onCurvePointChanged);
-  pointFolder.add(point, 'z', -8, 8, 0.05).name('Z').onChange(onCurvePointChanged);
-  pointFolder.close();
-});
+addCurvePanel(curveFolder);
 curveFolder.open();
 
+const vfxFolder = gui.addFolder('VFX');
+vfxFolder.add(vfxParams, 'bloomStrength', 0, 0.5, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
+vfxFolder.add(vfxParams, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(() => bloomPass.threshold = vfxParams.bloomThreshold);
+vfxFolder.add(vfxParams, 'bloomRadius', 0, 2, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
+vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 3, 0.05).name('Glow Speed');
+vfxFolder.add(vfxParams, 'glowIntensity', 0, 1, 0.05).name('Glow Intensity');
+vfxFolder.close();
+
 function onCurvePointChanged() {
+  clampAndOrderPoints();
   updatePointHelpers();
   rebuildWall();
 }
 
 function updatePointHelpers() {
-  controlPointHelpers.forEach((helper, idx) => {
-    const pt = controlPoints[idx];
-    helper.position.set(pt.x, 0.15, pt.z);
-  });
+  renderCurveUI();
 }
 
 function updateAttractor(curve = currentCurve) {
@@ -212,7 +232,20 @@ function createGradientTexture() {
 }
 
 function buildCurve() {
-  return new THREE.CatmullRomCurve3(controlPoints.map(pt => new THREE.Vector3(pt.x, 0, pt.z)), false, 'catmullrom', 0.5);
+  clampAndOrderPoints();
+  const spanX = params.wallLength * 0.9;
+  const spanZ = params.wallLength * 0.35;
+  const basePoints = controlPoints.map(pt => {
+    const u = THREE.MathUtils.clamp(pt.x, 0, 1);
+    const v = THREE.MathUtils.clamp(pt.z, 0, 1);
+    return new THREE.Vector3((u - 0.5) * spanX, 0, (v - 0.5) * spanZ);
+  });
+  const centroid = basePoints.reduce((acc, v) => acc.add(v), new THREE.Vector3()).multiplyScalar(1 / basePoints.length);
+  const baseCurve = new THREE.CatmullRomCurve3(basePoints, false, 'catmullrom', 0.5);
+  const baseLength = Math.max(baseCurve.getLength(), 0.0001);
+  const scale = params.wallLength / baseLength;
+  scaledControlPoints = basePoints.map(pt => pt.clone().sub(centroid).multiplyScalar(scale).add(centroid));
+  return new THREE.CatmullRomCurve3(scaledControlPoints, false, 'catmullrom', 0.5);
 }
 
 function refreshCurveLine(curve) {
@@ -261,12 +294,23 @@ function createBrick(length, height, width) {
   const edgeGeometry = new THREE.EdgesGeometry(geometry);
   const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
 
+  const glowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff2a2a,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  const glow = new THREE.Mesh(geometry.clone(), glowMaterial);
+  glow.visible = false;
+
   const group = new THREE.Group();
   group.add(mesh);
   group.add(edges);
+  group.add(glow);
   group.castShadow = true;
   group.receiveShadow = true;
-  return group;
+  return { group, glow };
 }
 
 function rebuildWall() {
@@ -275,34 +319,33 @@ function rebuildWall() {
   refreshCurveLine(curve);
   updateAttractor(curve);
   clearBricks();
+  renderCurveUI();
 
-  const columns = Math.max(2, Math.floor(params.wallLength / (params.brickLength + params.gap)));
+  const curveLength = Math.max(curve.getLength(), 0.0001);
+  const columns = Math.max(2, Math.ceil(curveLength / params.brickLength));
+  const segmentLength = curveLength / columns;
+  const brickLength = segmentLength * 1.01; // tiny overhang to eliminate gaps
   const rowHeight = params.wallHeight / params.rows;
-  const brickHeight = Math.max(0.05, rowHeight - params.gap * 0.6);
+  const brickHeight = Math.max(0.05, rowHeight - params.gap);
 
   for (let row = 0; row < params.rows; row += 1) {
     const heightOffset = row * rowHeight + brickHeight / 2;
-    const halfOffset = row % 2 === 0 ? 0 : 0.5;
-    const denom = columns - 1 + halfOffset;
-
-    for (let column = 0; column < columns; column += 1) {
-      const normalized = denom <= 0 ? 0 : (column + halfOffset) / denom;
-      const t = THREE.MathUtils.clamp(normalized, 0, 1);
-      const point = curve.getPoint(t);
-      const tangent = curve.getTangent(t).setY(0).normalize();
-      if (tangent.lengthSq() < 1e-5) {
-        tangent.set(1, 0, 0);
-      }
+    const startOffset = row % 2 === 0 ? segmentLength * 0.5 : 0;
+    for (let dist = startOffset, column = 0; dist <= curveLength - segmentLength * 0.25; dist += segmentLength, column += 1) {
+      const u = THREE.MathUtils.clamp(dist / curveLength, 0, 1);
+      const point = curve.getPointAt(u);
+      const tangent = curve.getTangentAt(u).setY(0).normalize();
+      if (tangent.lengthSq() < 1e-5) tangent.set(1, 0, 0);
       point.y = heightOffset;
 
-      const brick = createBrick(params.brickLength, brickHeight, params.wallWidth);
+      const { group: brick, glow } = createBrick(brickLength, brickHeight, params.wallWidth);
       const quaternion = new THREE.Quaternion();
       quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), tangent);
       brick.position.copy(point);
       brick.quaternion.copy(quaternion);
 
       brickGroup.add(brick);
-      bricksMeta.push({ object: brick, row, column, curveT: t });
+      bricksMeta.push({ object: brick, glow, row, column, curveT: u });
     }
   }
 
@@ -312,12 +355,16 @@ function rebuildWall() {
 }
 
 function applyFalloff() {
-  const removable = bricksMeta.filter(meta => meta.row > 0);
+  const removable = bricksMeta;
   if (!removable.length) return;
 
   bricksMeta.forEach(meta => {
     meta.object.visible = true;
-    if (meta.row === 0) meta.object.visible = true;
+    if (meta.glow) {
+      meta.glow.visible = false;
+      meta.glow.userData.baseOpacity = 0;
+      meta.glow.userData.intensity = 0;
+    }
   });
 
   let closest = Infinity;
@@ -339,9 +386,33 @@ function applyFalloff() {
     return b.row - a.row;
   });
 
-  const removalCount = Math.floor(sorted.length * effective);
+  const maxRemoval = Math.floor(sorted.length * 0.75);
+  const removalCount = Math.floor(maxRemoval * effective);
   sorted.forEach((meta, index) => {
     meta.object.visible = index >= removalCount;
+  });
+
+  const vfxActive = params.falloff > 0;
+  const span = Math.max(params.wallLength, params.wallHeight);
+  const vfxRange = span * 0.9 + params.wallWidth + 1.2;
+
+  bricksMeta.forEach(meta => {
+    if (!meta.glow) return;
+    if (!vfxActive) {
+      meta.glow.visible = false;
+      meta.glow.userData.baseOpacity = 0;
+      meta.glow.userData.intensity = 0;
+      return;
+    }
+    const dist = attractor.position.distanceTo(meta.object.position);
+    const norm = THREE.MathUtils.clamp(1 - dist / Math.max(vfxRange, 0.001), 0, 1);
+    const focus = Math.pow(norm, 2.2);
+    const closeBoost = norm > 0.85 ? THREE.MathUtils.smoothstep(norm, 0.85, 1) * 0.7 : 0;
+    const effectiveNorm = THREE.MathUtils.clamp(focus + closeBoost, 0, 1.6);
+    const baseOpacity = meta.object.visible ? effectiveNorm : 0;
+    meta.glow.userData.baseOpacity = baseOpacity;
+    meta.glow.userData.intensity = effectiveNorm;
+    meta.glow.visible = baseOpacity > 0.01;
   });
 }
 
@@ -385,6 +456,7 @@ function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 }
 
 window.addEventListener('resize', onWindowResize);
@@ -398,7 +470,192 @@ rebuildWall();
 function renderLoop() {
   requestAnimationFrame(renderLoop);
   controls.update();
-  renderer.render(scene, camera);
+  animateVfx();
+  composer.render();
 }
 
 renderLoop();
+
+function animateVfx() {
+  const time = performance.now() * 0.001;
+  const pulse = 0.5 + 0.5 * Math.sin(time * vfxParams.glowSpeed);
+  const glowPulse = vfxParams.glowIntensity * pulse;
+  brickMaterial.emissiveIntensity = 0.06;
+  const vfxActive = params.falloff > 0;
+  const attractorBase = vfxActive ? 1.2 : 0.15;
+  const attractorPulse = vfxActive ? 3.5 : 0;
+  attractor.material.emissiveIntensity = attractorBase + glowPulse * attractorPulse;
+  bricksMeta.forEach(meta => {
+    if (meta.glow && meta.glow.visible) {
+      const base = meta.glow.userData.baseOpacity || 0;
+      const intensity = meta.glow.userData.intensity || 0;
+      const gradientBoost = THREE.MathUtils.lerp(1.2, 3.6, intensity);
+      meta.glow.material.opacity = base * gradientBoost * (0.55 + 1.05 * glowPulse);
+      const dim = THREE.MathUtils.lerp(0.35, 0.05, intensity);
+      meta.glow.material.color.setRGB(1, dim, dim);
+    }
+  });
+  bloomPass.strength = vfxParams.bloomStrength;
+  bloomPass.threshold = vfxParams.bloomThreshold;
+  bloomPass.radius = vfxParams.bloomRadius;
+}
+
+function addCurvePanel(folder) {
+  const container = document.createElement('div');
+  container.style.padding = '8px 6px 10px';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = curveUI.width;
+  canvas.height = curveUI.height;
+  canvas.style.width = '100%';
+  canvas.style.borderRadius = '10px';
+  canvas.style.background = 'linear-gradient(180deg, #0c111c 0%, #0a0e17 100%)';
+  canvas.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.06)';
+  canvas.style.cursor = 'crosshair';
+  container.appendChild(canvas);
+
+  const info = document.createElement('div');
+  info.style.marginTop = '6px';
+  info.style.fontSize = '12px';
+  info.style.lineHeight = '1.5';
+  info.style.color = '#c7cedd';
+  info.innerHTML = 'Drag points to bend the path.<br>Points are normalized (0-1) across the panel.';
+  container.appendChild(info);
+
+  folder.domElement.appendChild(container);
+  curveUI.canvas = canvas;
+  curveUI.ctx = canvas.getContext('2d');
+
+  const onPointerDown = (e) => {
+    const pos = getUIPos(e);
+    const pts = getDisplayPoints().map(worldToUI);
+    const hit = pts.findIndex(p => distance2(p, pos) < 15 * 15);
+    if (hit >= 0) {
+      curveUI.dragging = hit;
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp, { once: true });
+    }
+  };
+
+  const onPointerMove = (e) => {
+    if (curveUI.dragging === null) return;
+    const pos = getUIPos(e);
+    const world = uiToWorld(pos);
+    controlPoints[curveUI.dragging].x = world.x;
+    controlPoints[curveUI.dragging].z = world.z;
+    onCurvePointChanged();
+    renderCurveUI();
+  };
+
+  const onPointerUp = () => {
+    curveUI.dragging = null;
+    window.removeEventListener('pointermove', onPointerMove);
+  };
+
+  canvas.addEventListener('pointerdown', onPointerDown);
+  renderCurveUI();
+}
+
+function getDisplayPoints() {
+  return controlPoints;
+}
+
+function getUIPos(event) {
+  const rect = curveUI.canvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * curveUI.width,
+    y: ((event.clientY - rect.top) / rect.height) * curveUI.height
+  };
+}
+
+function worldToUI(pt) {
+  const w = curveUI.width - curveUI.padding * 2;
+  const h = curveUI.height - curveUI.padding * 2;
+  const nx = THREE.MathUtils.clamp(pt.x, 0, 1);
+  const nz = THREE.MathUtils.clamp(pt.z, 0, 1);
+  return {
+    x: curveUI.padding + nx * w,
+    y: curveUI.height - (curveUI.padding + nz * h)
+  };
+}
+
+function uiToWorld(pos) {
+  const w = curveUI.width - curveUI.padding * 2;
+  const h = curveUI.height - curveUI.padding * 2;
+  const nx = THREE.MathUtils.clamp((pos.x - curveUI.padding) / w, 0, 1);
+  const nz = THREE.MathUtils.clamp((curveUI.height - pos.y - curveUI.padding) / h, 0, 1);
+  return {
+    x: nx,
+    z: nz
+  };
+}
+
+function renderCurveUI() {
+  if (!curveUI.ctx) return;
+  const ctx = curveUI.ctx;
+  const w = curveUI.width;
+  const h = curveUI.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // grid
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  const step = 20;
+  for (let x = curveUI.padding; x <= w - curveUI.padding + 1; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, curveUI.padding);
+    ctx.lineTo(x, h - curveUI.padding);
+    ctx.stroke();
+  }
+  for (let y = curveUI.padding; y <= h - curveUI.padding + 1; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(curveUI.padding, y);
+    ctx.lineTo(w - curveUI.padding, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const pts = getDisplayPoints().map(worldToUI);
+
+  // curve line
+  ctx.save();
+  ctx.strokeStyle = '#ff9f40';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) {
+    ctx.lineTo(pts[i].x, pts[i].y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // nodes
+  pts.forEach((p, idx) => {
+    ctx.save();
+    ctx.fillStyle = idx === curveUI.dragging ? '#ff6b4a' : '#6fb2ff';
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function distance2(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+function clampAndOrderPoints() {
+  const eps = 0.02;
+  for (let i = 0; i < controlPoints.length; i += 1) {
+    const prev = i === 0 ? 0 : controlPoints[i - 1].x + eps;
+    const next = i === controlPoints.length - 1 ? 1 : controlPoints[i + 1].x - eps;
+    controlPoints[i].x = THREE.MathUtils.clamp(controlPoints[i].x, prev, next);
+    controlPoints[i].z = THREE.MathUtils.clamp(controlPoints[i].z, 0, 1);
+  }
+}
