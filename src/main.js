@@ -175,8 +175,11 @@ function updateAttractor(curve = currentCurve) {
 }
 
 function setAttractorPosition(x, z, y = null) {
-  const safeY = y !== null ? y : Math.max(0.2, attractor.position.y || params.wallHeight * 0.5);
-  attractor.position.set(x, safeY, z);
+  const minY = 0.12;
+  const maxY = params.wallHeight + 4;
+  const candidateY = y !== null ? y : (attractor.position.y || params.wallHeight * 0.5);
+  const clampedY = THREE.MathUtils.clamp(candidateY, minY, maxY);
+  attractor.position.set(x, clampedY, z);
 }
 
 function onRowsChange() {
