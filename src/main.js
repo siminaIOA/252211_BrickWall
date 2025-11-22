@@ -312,32 +312,28 @@ function applyFalloff() {
   const removable = bricksMeta.filter(meta => meta.row > 0);
   if (!removable.length) return;
 
+  bricksMeta.forEach(meta => {
+    meta.object.visible = true;
+    if (meta.row === 0) meta.object.visible = true;
+  });
+
   let closest = Infinity;
   removable.forEach(meta => {
     const d = attractor.position.distanceTo(meta.object.position);
     if (d < closest) closest = d;
   });
 
-  const range = Math.max(params.wallLength, params.wallHeight) * 0.8 + params.wallWidth + 0.5;
-  const distanceFactor = THREE.MathUtils.clamp(1 - closest / Math.max(range, 0.001), 0, 1);
+  const baseRange = Math.max(params.wallLength, params.wallHeight) * 0.6 + params.wallWidth;
+  const sliderScale = THREE.MathUtils.lerp(0.5, 2.0, params.falloff);
+  const influenceRange = baseRange * sliderScale;
+  const distanceFactor = THREE.MathUtils.clamp(1 - closest / Math.max(influenceRange, 0.001), 0, 1);
   const effective = THREE.MathUtils.clamp(params.falloff * distanceFactor, 0, 1);
 
-  const rowsToRemove = Math.floor((params.rows - 1) * effective);
-  const removalStartRow = Math.max(1, params.rows - rowsToRemove);
-
-  bricksMeta.forEach(meta => {
-    meta.object.visible = true;
-    if (meta.row === 0) meta.object.visible = true;
-  });
-
-  const candidates = removable.filter(meta => meta.row >= removalStartRow);
-  const sorted = [...candidates].sort((a, b) => {
-    if (a.row !== b.row) {
-      return b.row - a.row;
-    }
+  const sorted = [...removable].sort((a, b) => {
     const distA = a.object.position.distanceTo(attractor.position);
     const distB = b.object.position.distanceTo(attractor.position);
-    return distA - distB;
+    if (Math.abs(distA - distB) > 1e-4) return distA - distB;
+    return b.row - a.row;
   });
 
   const removalCount = Math.floor(sorted.length * effective);
