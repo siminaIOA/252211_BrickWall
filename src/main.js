@@ -75,6 +75,12 @@ scene.add(brickGroup);
 let bricksMeta = [];
 let curveLine;
 let currentCurve = null;
+let userPlacedAttractor = false;
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let isDraggingAttractor = false;
 
 const controlPoints = [
   new THREE.Vector3(-4, 0, -1.5),
@@ -94,16 +100,17 @@ const controlPointHelpers = controlPoints.map(() => {
 });
 
 const attractor = new THREE.Mesh(
-  new THREE.SphereGeometry(0.3, 32, 32),
+  new THREE.SphereGeometry(0.16, 32, 32),
   new THREE.MeshPhysicalMaterial({
-    color: 0xff675c,
-    roughness: 0.18,
-    transmission: 0.7,
-    thickness: 1.4,
+    color: 0xff1a1a,
+    emissive: 0x3b0000,
+    roughness: 0.2,
+    transmission: 0.5,
+    thickness: 1.2,
     transparent: true,
-    opacity: 0.92,
-    clearcoat: 0.6,
-    clearcoatRoughness: 0.15
+    opacity: 0.95,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.18
   })
 );
 attractor.castShadow = true;
@@ -156,9 +163,18 @@ function updatePointHelpers() {
 }
 
 function updateAttractor(curve = currentCurve) {
+  if (userPlacedAttractor) return;
   const midPoint = curve ? curve.getPoint(0.5) : new THREE.Vector3();
-  attractor.position.set(midPoint.x, params.wallHeight + 0.5, midPoint.z);
-  attractor.scale.setScalar(0.65 + params.falloff * 0.85);
+  const offsetDir = curve ? curve.getTangent(0.5).setY(0).normalize() : new THREE.Vector3(0, 0, 1);
+  const side = new THREE.Vector3().crossVectors(offsetDir, new THREE.Vector3(0, 1, 0)).normalize();
+  const offset = side.multiplyScalar(params.wallWidth + 0.8);
+  const start = midPoint.clone().add(offset);
+  setAttractorPosition(start.x, start.z, params.wallHeight * 0.6);
+}
+
+function setAttractorPosition(x, z, y = null) {
+  const safeY = y !== null ? y : Math.max(0.2, attractor.position.y || params.wallHeight * 0.5);
+  attractor.position.set(x, safeY, z);
 }
 
 function createGradientTexture() {
@@ -278,7 +294,28 @@ function rebuildWall() {
 
 function applyFalloff() {
   const removable = bricksMeta.filter(meta => meta.row > 0);
-  const sorted = [...removable].sort((a, b) => {
+  if (!removable.length) return;
+
+  let closest = Infinity;
+  removable.forEach(meta => {
+    const d = attractor.position.distanceTo(meta.object.position);
+    if (d < closest) closest = d;
+  });
+
+  const range = Math.max(params.wallLength, params.wallHeight) * 0.8 + params.wallWidth + 0.5;
+  const distanceFactor = THREE.MathUtils.clamp(1 - closest / Math.max(range, 0.001), 0, 1);
+  const effective = THREE.MathUtils.clamp(params.falloff * distanceFactor, 0, 1);
+
+  const rowsToRemove = Math.floor((params.rows - 1) * effective);
+  const removalStartRow = Math.max(1, params.rows - rowsToRemove);
+
+  bricksMeta.forEach(meta => {
+    meta.object.visible = true;
+    if (meta.row === 0) meta.object.visible = true;
+  });
+
+  const candidates = removable.filter(meta => meta.row >= removalStartRow);
+  const sorted = [...candidates].sort((a, b) => {
     if (a.row !== b.row) {
       return b.row - a.row;
     }
@@ -287,18 +324,46 @@ function applyFalloff() {
     return distA - distB;
   });
 
-  const maxRemovable = Math.floor(sorted.length * 0.75);
-  const removalCount = Math.floor(maxRemovable * params.falloff);
-
-  bricksMeta.forEach(meta => {
-    if (meta.row === 0) {
-      meta.object.visible = true;
-    }
-  });
-
+  const removalCount = Math.floor(sorted.length * effective);
   sorted.forEach((meta, index) => {
     meta.object.visible = index >= removalCount;
   });
+}
+
+function updatePointer(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function onPointerDown(event) {
+  updatePointer(event);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(attractor, false);
+  if (hit.length) {
+    const normal = camera.getWorldDirection(new THREE.Vector3());
+    dragPlane.setFromNormalAndCoplanarPoint(normal, attractor.position);
+    isDraggingAttractor = true;
+    userPlacedAttractor = true;
+    controls.enabled = false;
+  }
+}
+
+function onPointerMove(event) {
+  if (!isDraggingAttractor) return;
+  updatePointer(event);
+  raycaster.setFromCamera(pointer, camera);
+  const targetPoint = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(dragPlane, targetPoint)) {
+    setAttractorPosition(targetPoint.x, targetPoint.z, targetPoint.y);
+    applyFalloff();
+  }
+}
+
+function onPointerUp() {
+  if (!isDraggingAttractor) return;
+  isDraggingAttractor = false;
+  controls.enabled = true;
 }
 
 function onWindowResize() {
@@ -308,6 +373,9 @@ function onWindowResize() {
 }
 
 window.addEventListener('resize', onWindowResize);
+renderer.domElement.addEventListener('pointerdown', onPointerDown);
+renderer.domElement.addEventListener('pointermove', onPointerMove);
+window.addEventListener('pointerup', onPointerUp);
 
 updatePointHelpers();
 rebuildWall();
