@@ -245,7 +245,7 @@ function buildCurve() {
   const basePoints = controlPoints.map(pt => {
     const u = THREE.MathUtils.clamp(pt.x, 0, 1);
     const v = THREE.MathUtils.clamp(pt.z, 0, 1);
-    return new THREE.Vector3((u - 0.5) * spanX, 0, (v - 0.5) * spanZ);
+    return new THREE.Vector3((u - 0.5) * spanX, 0, (0.5 - v) * spanZ);
   });
   const centroid = basePoints.reduce((acc, v) => acc.add(v), new THREE.Vector3()).multiplyScalar(1 / basePoints.length);
   const baseCurve = new THREE.CatmullRomCurve3(basePoints, false, 'catmullrom', 0.5);
@@ -256,15 +256,6 @@ function buildCurve() {
 }
 
 function refreshCurveLine(curve) {
-  const positions = curve.getSpacedPoints(200).map(pt => new THREE.Vector3(pt.x, 0.02, pt.z));
-  const geometry = new THREE.BufferGeometry().setFromPoints(positions);
-  if (curveLine) {
-    scene.remove(curveLine);
-    curveLine.geometry.dispose();
-    curveLine.material.dispose();
-  }
-  curveLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0x3ecaff, transparent: true, opacity: 0.45 }));
-  scene.add(curveLine);
 }
 
 function clearBricks() {
@@ -325,7 +316,6 @@ function createBrick(length, height, width) {
 function rebuildWall() {
   const curve = buildCurve();
   currentCurve = curve;
-  refreshCurveLine(curve);
   updateAttractor(curve);
   clearBricks();
   renderCurveUI();
