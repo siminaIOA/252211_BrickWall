@@ -1,0 +1,21 @@
+{
+  "name": "252211_brickwall",
+  "version": "1.0.0",
+  "description": "Parametric brick wall visualized with Three.js and lil-gui",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "lil-gui": "^0.21.0",
+    "three": "^0.181.2"
+  },
+  "devDependencies": {
+    "vite": "^7.2.4"
+  }
+}
