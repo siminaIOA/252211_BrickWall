@@ -125,15 +125,17 @@ const params = {
   rows: 10,
   falloff: 0
 };
+let rowUnitHeight = params.wallHeight / params.rows;
+let lastRows = params.rows;
 
 const gui = new GUI({ title: 'Parametric Brick Wall' });
 const wallFolder = gui.addFolder('Wall Parameters');
 wallFolder.add(params, 'brickLength', 0.2, 1.2, 0.02).name('Brick Length').onChange(rebuildWall);
 wallFolder.add(params, 'wallLength', 2, 20, 0.1).name('Wall Length').onChange(rebuildWall);
 wallFolder.add(params, 'wallWidth', 0.2, 0.8, 0.01).name('Wall Width').onChange(rebuildWall);
-wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(rebuildWall);
+wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(onWallHeightChange);
 wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Brick Gap').onChange(rebuildWall);
-wallFolder.add(params, 'rows', 2, 30, 1).name('Rows').onChange(rebuildWall);
+wallFolder.add(params, 'rows', 2, 30, 1).name('Rows').onChange(onRowsChange);
 wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
   updateAttractor();
   applyFalloff();
@@ -175,6 +177,18 @@ function updateAttractor(curve = currentCurve) {
 function setAttractorPosition(x, z, y = null) {
   const safeY = y !== null ? y : Math.max(0.2, attractor.position.y || params.wallHeight * 0.5);
   attractor.position.set(x, safeY, z);
+}
+
+function onRowsChange() {
+  const unit = rowUnitHeight || (params.wallHeight / Math.max(lastRows, 1));
+  params.wallHeight = unit * params.rows;
+  lastRows = params.rows;
+  rebuildWall();
+}
+
+function onWallHeightChange() {
+  rowUnitHeight = params.wallHeight / Math.max(params.rows, 1);
+  rebuildWall();
 }
 
 function createGradientTexture() {
@@ -290,6 +304,8 @@ function rebuildWall() {
   }
 
   applyFalloff();
+  rowUnitHeight = params.wallHeight / Math.max(params.rows, 1);
+  lastRows = params.rows;
 }
 
 function applyFalloff() {
