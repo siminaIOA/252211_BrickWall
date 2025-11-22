@@ -137,7 +137,7 @@ const params = {
   wallHeight: 3,
   gap: 0.0,
   rows: 10,
-  falloff: 0
+  falloff: 0.15
 };
 let rowUnitHeight = params.wallHeight / params.rows;
 let lastRows = params.rows;
@@ -173,7 +173,7 @@ const vfxFolder = gui.addFolder('VFX Settings');
 vfxFolder.add(vfxParams, 'bloomStrength', 0, 0.5, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
 vfxFolder.add(vfxParams, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(() => bloomPass.threshold = vfxParams.bloomThreshold);
 vfxFolder.add(vfxParams, 'bloomRadius', 0, 2, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
-vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 3, 0.05).name('Glow Speed');
+vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 10, 0.05).name('Glow Speed');
 vfxFolder.add(vfxParams, 'glowIntensity', 0, 1, 0.05).name('Glow Intensity');
 vfxFolder.close();
 
