@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "html2canvas": "^1.4.1",
     "lil-gui": "^0.21.0",
     "three": "^0.181.2"
   },

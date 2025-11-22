@@ -5,10 +5,11 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import html2canvas from 'html2canvas';
 import GUI from 'lil-gui';
 
 const root = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
@@ -178,6 +179,7 @@ vfxFolder.close();
 
 const exportFolder = gui.addFolder('Export');
 exportFolder.add({ exportObj }, 'exportObj').name('Export .obj');
+exportFolder.add({ snapshot }, 'snapshot').name('Snapshot');
 
 function onCurvePointChanged() {
   clampAndOrderPoints();
@@ -506,13 +508,14 @@ function animateVfx() {
       const dim = THREE.MathUtils.lerp(0.35, 0.05, intensity);
       meta.glow.material.color.setRGB(1, dim, dim);
     }
+    updateBrickColors(meta, glowPulse, vfxActive);
   });
   bloomPass.strength = vfxParams.bloomStrength;
   bloomPass.threshold = vfxParams.bloomThreshold;
   bloomPass.radius = vfxParams.bloomRadius;
 }
 
-function updateBrickColors(meta) {
+function updateBrickColors(meta, pulse = 0, vfxActive = false) {
   const mesh = meta.object.children.find(c => c.isMesh);
   if (!mesh) return;
   const geo = mesh.geometry;
@@ -521,7 +524,8 @@ function updateBrickColors(meta) {
   if (!base || !attr) return;
   const baseIntensity = meta.baseColorIntensity || 0;
   const dynamicIntensity = meta.colorIntensity || 0;
-  const intensity = THREE.MathUtils.clamp(Math.max(baseIntensity, dynamicIntensity) * 5.0, 0, 1);
+  const pulseBoost = vfxActive ? (1 + pulse * 0.35) : 1;
+  const intensity = THREE.MathUtils.clamp(Math.max(baseIntensity, dynamicIntensity) * 5.0 * pulseBoost, 0, 1);
   const red = new THREE.Color(1, 0, 0);
   for (let i = 0; i < attr.count; i += 1) {
     const bi = i * 3;
@@ -624,6 +628,16 @@ function exportObj() {
   link.download = 'brick_wall.obj';
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function snapshot() {
+  html2canvas(document.body, { backgroundColor: '#080b11', useCORS: true, logging: false }).then(canvas => {
+    const dataURL = canvas.toDataURL('image/png', 1.0);
+    const link = document.createElement('a');
+    link.href = dataURL;
+    link.download = 'brick_wall_snapshot.png';
+    link.click();
+  });
 }
 
 function addCurvePanel(folder) {
