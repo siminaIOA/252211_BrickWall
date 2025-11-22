@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import GUI from 'lil-gui';
 
 const root = document.getElementById('app');
@@ -166,13 +168,16 @@ curveFolder.domElement.style.marginTop = '8px';
 addCurvePanel(curveFolder);
 curveFolder.open();
 
-const vfxFolder = gui.addFolder('VFX');
+const vfxFolder = gui.addFolder('VFX Settings');
 vfxFolder.add(vfxParams, 'bloomStrength', 0, 0.5, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
 vfxFolder.add(vfxParams, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(() => bloomPass.threshold = vfxParams.bloomThreshold);
 vfxFolder.add(vfxParams, 'bloomRadius', 0, 2, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
 vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 3, 0.05).name('Glow Speed');
 vfxFolder.add(vfxParams, 'glowIntensity', 0, 1, 0.05).name('Glow Intensity');
 vfxFolder.close();
+
+const exportFolder = gui.addFolder('Export');
+exportFolder.add({ exportObj }, 'exportObj').name('Export .obj');
 
 function onCurvePointChanged() {
   clampAndOrderPoints();
@@ -351,6 +356,7 @@ function rebuildWall() {
     }
   }
 
+  applyStaticWallGradient();
   applyFalloff();
   rowUnitHeight = params.wallHeight / Math.max(params.rows, 1);
   lastRows = params.rows;
@@ -418,6 +424,7 @@ function applyFalloff() {
     meta.colorIntensity = effectiveNorm;
   });
 
+  applyStaticWallGradient();
   bricksMeta.forEach(meta => updateBrickColors(meta));
 }
 
@@ -512,7 +519,9 @@ function updateBrickColors(meta) {
   const base = geo.userData.baseColors;
   const attr = geo.getAttribute('color');
   if (!base || !attr) return;
-  const intensity = THREE.MathUtils.clamp((meta.colorIntensity || 0) * 3.0, 0, 1);
+  const baseIntensity = meta.baseColorIntensity || 0;
+  const dynamicIntensity = meta.colorIntensity || 0;
+  const intensity = THREE.MathUtils.clamp(Math.max(baseIntensity, dynamicIntensity) * 5.0, 0, 1);
   const red = new THREE.Color(1, 0, 0);
   for (let i = 0; i < attr.count; i += 1) {
     const bi = i * 3;
@@ -524,6 +533,97 @@ function updateBrickColors(meta) {
     attr.array[bi + 2] = THREE.MathUtils.lerp(bb, red.b, intensity);
   }
   attr.needsUpdate = true;
+}
+
+function applyStaticWallGradient() {
+  const visible = bricksMeta.filter(m => m.object.visible);
+  if (!visible.length) return;
+
+  let yMin = Infinity, yMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+  visible.forEach(meta => {
+    const mesh = meta.object.children.find(c => c.isMesh);
+    if (!mesh) return;
+    const box = new THREE.Box3().setFromObject(mesh);
+    yMin = Math.min(yMin, box.min.y);
+    yMax = Math.max(yMax, box.max.y);
+    zMin = Math.min(zMin, box.min.z);
+    zMax = Math.max(zMax, box.max.z);
+  });
+  const ySpan = Math.max(yMax - yMin, 0.0001);
+  const zSpan = Math.max(zMax - zMin, 0.0001);
+
+  visible.forEach(meta => {
+    const mesh = meta.object.children.find(c => c.isMesh);
+    if (!mesh) return;
+    const pos = mesh.geometry.attributes.position;
+    let accum = 0;
+    for (let i = 0; i < pos.count; i += 1) {
+      const ny = (pos.getY(i) - yMin) / ySpan;
+      const nz = (pos.getZ(i) - zMin) / zSpan;
+      accum += (ny * 0.7 + nz * 0.3);
+    }
+    const avg = accum / pos.count;
+    meta.baseColorIntensity = THREE.MathUtils.clamp(avg, 0, 1);
+  });
+}
+
+function exportObj() {
+  // Ensure latest visibility and color gradients are baked
+  applyFalloff();
+
+  const exporter = new OBJExporter();
+  const visible = bricksMeta.filter(meta => meta.object.visible);
+  if (!visible.length) {
+    console.warn('No visible bricks to export.');
+    return;
+  }
+
+  const geoms = [];
+  visible.forEach(meta => {
+    const mesh = meta.object.children.find(c => c.isMesh);
+    if (!mesh || !mesh.geometry) return;
+    const geom = mesh.geometry.clone();
+    geom.applyMatrix4(mesh.matrixWorld);
+    geoms.push(geom);
+  });
+
+  if (!geoms.length) return;
+  const merged = BufferGeometryUtils.mergeGeometries(geoms, true);
+
+  // Apply a global red gradient across the merged geometry (Y then Z for subtle variation)
+  const pos = merged.getAttribute('position');
+  const color = new Float32Array(pos.count * 3);
+  let yMin = Infinity, yMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
+    zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
+  }
+  const ySpan = Math.max(yMax - yMin, 0.0001);
+  const zSpan = Math.max(zMax - zMin, 0.0001);
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const ny = (y - yMin) / ySpan;
+    const nz = (z - zMin) / zSpan;
+    const grad = THREE.MathUtils.clamp((ny * 0.7 + nz * 0.3), 0, 1);
+    color[i * 3] = 1.0;
+    color[i * 3 + 1] = THREE.MathUtils.lerp(0.6, 0.0, grad);
+    color[i * 3 + 2] = THREE.MathUtils.lerp(0.6, 0.0, grad);
+  }
+  merged.setAttribute('color', new THREE.BufferAttribute(color, 3));
+
+  const exportMesh = new THREE.Mesh(merged, new THREE.MeshBasicMaterial({ vertexColors: true }));
+  const objText = exporter.parse(exportMesh);
+
+  const blob = new Blob([objText], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'brick_wall.obj';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function addCurvePanel(folder) {
@@ -551,6 +651,8 @@ function addCurvePanel(folder) {
   folder.domElement.appendChild(container);
   curveUI.canvas = canvas;
   curveUI.ctx = canvas.getContext('2d');
+
+  pruneEmptyLabel(folder);
 
   const onPointerDown = (e) => {
     const pos = getUIPos(e);
@@ -642,16 +744,20 @@ function renderCurveUI() {
   }
   ctx.restore();
 
-  const pts = getDisplayPoints().map(worldToUI);
+  const nodes = getDisplayPoints();
+  const pts = nodes.map(worldToUI);
+  const curvePts = buildUICurve(nodes);
 
-  // curve line
+  // curve line (spline)
   ctx.save();
-  ctx.strokeStyle = '#ff9f40';
+  ctx.strokeStyle = '#3ecaff';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) {
-    ctx.lineTo(pts[i].x, pts[i].y);
+  if (curvePts.length > 0) {
+    ctx.moveTo(curvePts[0].x, curvePts[0].y);
+    for (let i = 1; i < curvePts.length; i++) {
+      ctx.lineTo(curvePts[i].x, curvePts[i].y);
+    }
   }
   ctx.stroke();
   ctx.restore();
@@ -674,6 +780,28 @@ function distance2(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return dx * dx + dy * dy;
+}
+
+function buildUICurve(nodes) {
+  if (!nodes.length) return [];
+  if (nodes.length === 1) return [worldToUI(nodes[0])];
+  const curve = new THREE.CatmullRomCurve3(
+    nodes.map(n => new THREE.Vector3(n.x, 0, n.z)),
+    false,
+    'catmullrom',
+    0.5
+  );
+  const pts = curve.getSpacedPoints(80);
+  return pts.map(p => worldToUI({ x: p.x, z: p.z }));
+}
+
+function pruneEmptyLabel(folder) {
+  const remove = () => {
+    const empties = folder.domElement.querySelectorAll('.controller.empty');
+    empties.forEach(el => el.remove());
+  };
+  remove();
+  requestAnimationFrame(remove);
 }
 
 function clampAndOrderPoints() {
