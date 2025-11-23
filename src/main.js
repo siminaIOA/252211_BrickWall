@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
+import { PLYExporter } from 'three/examples/jsm/exporters/PLYExporter.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import html2canvas from 'html2canvas';
 import {
@@ -201,6 +202,7 @@ vfxFolder.close();
 const exportFolder = gui.addFolder('Export');
 exportFolder.add({ exportObj }, 'exportObj').name('Export .obj');
 exportFolder.add({ snapshot }, 'snapshot').name('Snapshot');
+exportFolder.add({ exportPly }, 'exportPly').name('Export .ply');
 
 const simFolder = gui.addFolder('Simulation');
 simFolder.add({ start: startCollapse }, 'start').name('Start Collapse');
@@ -488,22 +490,17 @@ function applyFalloff() {
 
   bricksMeta.forEach(meta => {
     if (!meta.glow) return;
-    if (!vfxActive) {
-      meta.glow.visible = false;
-      meta.glow.userData.baseOpacity = 0;
-      meta.glow.userData.intensity = 0;
-      return;
-    }
     const dist = attractor.position.distanceTo(meta.object.position);
     const norm = THREE.MathUtils.clamp(1 - dist / Math.max(vfxRange, 0.001), 0, 1);
     const focus = Math.pow(norm, 2.2);
     const closeBoost = norm > 0.85 ? THREE.MathUtils.smoothstep(norm, 0.85, 1) * 0.7 : 0;
     const effectiveNorm = THREE.MathUtils.clamp(focus + closeBoost, 0, 1.6);
-    const baseOpacity = meta.object.visible ? effectiveNorm : 0;
+    const baseOpacity = meta.object.visible && vfxActive ? effectiveNorm : 0;
     meta.glow.userData.baseOpacity = baseOpacity;
     meta.glow.userData.intensity = effectiveNorm;
-    meta.glow.visible = baseOpacity > 0.01;
-    meta.colorIntensity = effectiveNorm;
+    meta.glow.visible = vfxActive && baseOpacity > 0.01;
+    const colorNorm = THREE.MathUtils.clamp(norm, 0, 1);
+    meta.colorIntensity = Math.max(colorNorm, effectiveNorm);
   });
 
   applyStaticWallGradient();
@@ -616,7 +613,8 @@ function updateBrickColors(meta, pulse = 0, vfxActive = false) {
   const baseIntensity = meta.baseColorIntensity || 0;
   const dynamicIntensity = meta.colorIntensity || 0;
   const pulseBoost = vfxActive ? (1 + pulse * 0.35) : 1;
-  const intensity = THREE.MathUtils.clamp(Math.max(baseIntensity, dynamicIntensity) * 5.0 * pulseBoost, 0, 1);
+  const blend = Math.max(baseIntensity * 1.2, dynamicIntensity * 3.0);
+  const intensity = THREE.MathUtils.clamp(blend * 5.0 * pulseBoost, 0, 1);
   const red = new THREE.Color(1, 0, 0);
   for (let i = 0; i < attr.count; i += 1) {
     const bi = i * 3;
@@ -681,6 +679,26 @@ function exportObj() {
     const mesh = meta.object.children.find(c => c.isMesh);
     if (!mesh || !mesh.geometry) return;
     const geom = mesh.geometry.clone();
+    const pos = geom.getAttribute('position');
+    const count = pos.count;
+    const colors = new Float32Array(count * 3);
+    let yMin = Infinity, yMax = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const y = pos.getY(i);
+      yMin = Math.min(yMin, y);
+      yMax = Math.max(yMax, y);
+    }
+    const ySpan = Math.max(yMax - yMin, 0.0001);
+    for (let i = 0; i < count; i++) {
+      const y = pos.getY(i);
+      const ny = (y - yMin) / ySpan;
+      const g = THREE.MathUtils.lerp(0.1, 0.0, ny);
+      const b = THREE.MathUtils.lerp(0.08, 0.0, ny);
+      colors[i * 3] = 1.0;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geom.applyMatrix4(mesh.matrixWorld);
     geoms.push(geom);
   });
@@ -732,6 +750,77 @@ function snapshot() {
     link.download = 'brick_wall_snapshot.png';
     link.click();
   });
+}
+
+function exportPly() {
+  // Bake current visibility/VFX colors
+  applyFalloff();
+  const vfxActive = true;
+  const exportPulse = Math.max(vfxParams.glowIntensity, 0.2);
+  bricksMeta.forEach(meta => updateBrickColors(meta, exportPulse, vfxActive));
+
+  const exporter = new PLYExporter();
+  const visible = bricksMeta.filter(meta => meta.object.visible);
+  if (!visible.length) {
+    console.warn('No visible bricks to export.');
+    return;
+  }
+
+  const geoms = [];
+  visible.forEach(meta => {
+    const mesh = meta.object.children.find(c => c.isMesh);
+    if (!mesh || !mesh.geometry) return;
+    const geom = mesh.geometry.clone();
+    geom.applyMatrix4(mesh.matrixWorld);
+    geoms.push(geom);
+  });
+
+  if (!geoms.length) return;
+  const merged = BufferGeometryUtils.mergeGeometries(geoms, true);
+  // Apply a global gradient driven by height and distance to attractor
+  const pos = merged.getAttribute('position');
+  const color = new Float32Array(pos.count * 3);
+  let yMin = Infinity, yMax = -Infinity, dMin = Infinity, dMax = -Infinity;
+  const attractorPos = attractor.position.clone();
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const dx = pos.getX(i) - attractorPos.x;
+    const dy = pos.getY(i) - attractorPos.y;
+    const dz = pos.getZ(i) - attractorPos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
+    dMin = Math.min(dMin, dist); dMax = Math.max(dMax, dist);
+  }
+  const ySpan = Math.max(yMax - yMin, 0.0001);
+  const dSpan = Math.max(dMax - dMin, 0.0001);
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const ny = (y - yMin) / ySpan;
+    const dx = pos.getX(i) - attractorPos.x;
+    const dy = pos.getY(i) - attractorPos.y;
+    const dz = pos.getZ(i) - attractorPos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const nd = Math.min(Math.max((dist - dMin) / dSpan, 0), 1); // 0 near attractor, 1 far
+    // Make near-attractor lighter, far edges darker
+    const intensity = THREE.MathUtils.clamp(0.2 + nd * 0.7 + ny * 0.05, 0, 1);
+    const g = THREE.MathUtils.lerp(0.6, 0.0, intensity);
+    const b = THREE.MathUtils.lerp(0.6, 0.0, intensity);
+    color[i * 3] = 1.0;
+    color[i * 3 + 1] = g;
+    color[i * 3 + 2] = b;
+  }
+  merged.setAttribute('color', new THREE.BufferAttribute(color, 3));
+
+  const exportMesh = new THREE.Mesh(merged, new THREE.MeshBasicMaterial({ vertexColors: true }));
+  const data = exporter.parse(exportMesh);
+
+  const blob = new Blob([data], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'brick_wall.ply';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function initPhysics() {
