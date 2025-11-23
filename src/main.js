@@ -665,6 +665,9 @@ function applyStaticWallGradient() {
 function exportObj() {
   // Ensure latest visibility and color gradients are baked
   applyFalloff();
+  const vfxActive = params.falloff > 0;
+  const exportPulse = vfxActive ? vfxParams.glowIntensity : 0;
+  bricksMeta.forEach(meta => updateBrickColors(meta, exportPulse, vfxActive));
 
   const exporter = new OBJExporter();
   const visible = bricksMeta.filter(meta => meta.object.visible);
@@ -796,7 +799,7 @@ function startCollapse() {
     const rowFactor = maxRow > 0 ? meta.row / maxRow : 0;
     const topBias = proxWeight * 0.95 + rowFactor * 0.45;
     const lateral = (0.05 + 0.15 * proxWeight) * 1.6 * 1.7;
-    const downImpulse = (0.4 + 6.0 * topBias) * 2.0 * 1.15 * 2.15625 * 1.18965;
+    const downImpulse = (0.4 + 6.0 * topBias) * 2.0 * 1.15 * 2.15625 * 1.18965 * 1.071;
     const impulse = new Vec3(
       (Math.random() - 0.5) * lateral,
       -downImpulse,
