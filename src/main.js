@@ -158,9 +158,7 @@ const params = {
   gap: 0.0,
   rows: 10,
   falloff: 0.15,
-  horizontalGap: 0.0,
-  lightingPreset: 'studio',
-  timeOfDay: 15
+  horizontalGap: 0.0
 };
 let rowUnitHeight = params.wallHeight / params.rows;
 let lastRows = params.rows;
@@ -201,55 +199,6 @@ vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 10, 0.05).name('Glow Speed');
 vfxFolder.add(vfxParams, 'glowIntensity', 0, 0.3, 0.01).name('Glow Intensity');
 vfxFolder.close();
 
-const lightingFolder = gui.addFolder('Lighting');
-lightingFolder.add(params, 'lightingPreset', ['studio', 'dusk', 'hdrish']).name('Preset').onChange(updateLighting);
-lightingFolder.add(params, 'timeOfDay', 0, 24, 0.25).name('Time of Day').onChange(updateLighting);
-lightingFolder.close();
-
-const lightingPresets = {
-  studio: {
-    background: 0x080b11,
-    hemiSky: 0xf8f6f1,
-    hemiGround: 0x10131a,
-    hemiIntensity: 1.35,
-    sunColor: 0xffffff,
-    sunIntensity: 2.4,
-    rimColor: 0xb7c6ff,
-    rimIntensity: 0.9,
-    spotColor: 0xfff1d8,
-    spotIntensity: 1.1
-  },
-  dusk: {
-    background: 0x0c0d18,
-    hemiSky: 0xa6b7d8,
-    hemiGround: 0x161824,
-    hemiIntensity: 1.1,
-    sunColor: 0xffad7a,
-    sunIntensity: 1.6,
-    rimColor: 0x8da3ff,
-    rimIntensity: 0.7,
-    spotColor: 0xffc79a,
-    spotIntensity: 0.6
-  },
-  hdrish: {
-    background: 0x0f1218,
-    hemiSky: 0xd5dee8,
-    hemiGround: 0x1a1c20,
-    hemiIntensity: 1.6,
-    sunColor: 0xf5f0e6,
-    sunIntensity: 2.0,
-    rimColor: 0xc3d5ff,
-    rimIntensity: 0.8,
-    spotColor: 0xf2e5d2,
-    spotIntensity: 0.8
-  }
-};
-
-const lightingFolder = gui.addFolder('Lighting');
-lightingFolder.add(params, 'lightingPreset', ['studio', 'dusk', 'hdrish']).name('Preset').onChange(updateLighting);
-lightingFolder.add(params, 'timeOfDay', 0, 24, 0.25).name('Time of Day').onChange(updateLighting);
-lightingFolder.close();
-
 const exportFolder = gui.addFolder('Export');
 exportFolder.add({ exportObj }, 'exportObj').name('Export .obj');
 exportFolder.add({ snapshot }, 'snapshot').name('Snapshot');
@@ -258,49 +207,6 @@ exportFolder.add({ exportPly }, 'exportPly').name('Export .ply');
 const simFolder = gui.addFolder('Simulation');
 simFolder.add({ start: startCollapse }, 'start').name('Start Collapse');
 simFolder.add({ reset: resetWall }, 'reset').name('Reset Wall');
-simFolder.close();
-
-updateLighting();
-
-function updateLighting() {
-  const preset = lightingPresets[params.lightingPreset] || lightingPresets.studio;
-  const t = params.timeOfDay;
-  const dayFactor = Math.max(0.1, Math.sin((t / 24) * Math.PI));
-
-  setBackground(preset.background);
-  hemiLight.color.setHex(preset.hemiSky);
-  hemiLight.groundColor.setHex(preset.hemiGround);
-  hemiLight.intensity = preset.hemiIntensity;
-
-  keyLight.color.setHex(preset.sunColor);
-  rimLight.color.setHex(preset.rimColor);
-  spotLight.color.setHex(preset.spotColor);
-
-  updateSunDirection(t);
-  keyLight.intensity = preset.sunIntensity * (0.4 + 0.6 * dayFactor);
-  rimLight.intensity = preset.rimIntensity * (0.4 + 0.6 * dayFactor);
-  spotLight.intensity = preset.spotIntensity * (0.5 + 0.5 * dayFactor);
-}
-
-function updateSunDirection(time) {
-  const az = (time / 24) * Math.PI * 2;
-  const elevNorm = Math.max(0, Math.sin((time / 24) * Math.PI));
-  const elev = Math.max(0.08, elevNorm * Math.PI * 0.48);
-  const radius = 24;
-  const x = Math.cos(elev) * Math.cos(az) * radius;
-  const y = Math.sin(elev) * 18 + 4;
-  const z = Math.cos(elev) * Math.sin(az) * radius;
-  keyLight.position.set(x, y, z);
-  keyLight.target.position.set(0, 1.2, 0);
-  keyLight.target.updateMatrixWorld();
-}
-
-function setBackground(colorHex) {
-  scene.background = new THREE.Color(colorHex);
-  if (scene.fog) {
-    scene.fog.color.setHex(colorHex);
-  }
-}
 
 function onCurvePointChanged() {
   clampAndOrderPoints();
