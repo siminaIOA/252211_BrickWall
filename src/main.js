@@ -114,7 +114,7 @@ const controlPoints = [
 ];
 let scaledControlPoints = controlPoints.map(pt => pt.clone());
 const curveBounds = { xMin: 0, xMax: 1, zMin: 0, zMax: 1 };
-const curveUI = { canvas: null, ctx: null, padding: 16, width: 340, height: 200, dragging: null };
+const curveUI = { canvas: null, ctx: null, padding: 16, width: 260, height: 260, dragging: null };
 const controlPointHelpers = [];
 
 const attractorMaterial = new THREE.MeshStandardMaterial({
@@ -148,7 +148,7 @@ const vfxParams = {
   bloomThreshold: 0.08,
   bloomRadius: 1.0,
   glowSpeed: 1.25,
-  glowIntensity: 0.55
+  glowIntensity: 0.1
 };
 
 const gui = new GUI({ title: 'Parametric Brick Wall' });
@@ -157,8 +157,8 @@ wallFolder.add(params, 'brickLength', 0.2, 1.2, 0.02).name('Brick Length').onCha
 wallFolder.add(params, 'wallLength', 2, 20, 0.1).name('Wall Length').onChange(rebuildWall);
 wallFolder.add(params, 'wallWidth', 0.2, 0.8, 0.01).name('Wall Width').onChange(rebuildWall);
 wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(onWallHeightChange);
-wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Vertical Gap (Y)').onChange(rebuildWall);
-wallFolder.add(params, 'horizontalGap', 0.0, 0.15, 0.005).name('Horizontal Gap (X)').onChange(rebuildWall);
+wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Vertical Gap').onChange(rebuildWall);
+wallFolder.add(params, 'horizontalGap', 0.0, 0.15, 0.005).name('Horizontal Gap').onChange(rebuildWall);
 wallFolder.add(params, 'rows', 2, 30, 1).name('Rows').onChange(onRowsChange);
 wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
   updateAttractor();
@@ -172,11 +172,11 @@ addCurvePanel(curveFolder);
 curveFolder.open();
 
 const vfxFolder = gui.addFolder('VFX Settings');
-vfxFolder.add(vfxParams, 'bloomStrength', 0, 1, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
+vfxFolder.add(vfxParams, 'bloomStrength', 0, 0.5, 0.01).name('Bloom Strength').onChange(() => bloomPass.strength = vfxParams.bloomStrength);
 vfxFolder.add(vfxParams, 'bloomThreshold', 0, 1, 0.01).name('Bloom Threshold').onChange(() => bloomPass.threshold = vfxParams.bloomThreshold);
-vfxFolder.add(vfxParams, 'bloomRadius', 0, 2, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
+vfxFolder.add(vfxParams, 'bloomRadius', 0, 1.25, 0.01).name('Bloom Radius').onChange(() => bloomPass.radius = vfxParams.bloomRadius);
 vfxFolder.add(vfxParams, 'glowSpeed', 0.25, 10, 0.05).name('Glow Speed');
-vfxFolder.add(vfxParams, 'glowIntensity', 0, 1, 0.05).name('Glow Intensity');
+vfxFolder.add(vfxParams, 'glowIntensity', 0, 0.3, 0.01).name('Glow Intensity');
 vfxFolder.close();
 
 const exportFolder = gui.addFolder('Export');
@@ -714,6 +714,14 @@ function addCurvePanel(folder) {
   info.innerHTML = 'Drag points to bend the path.<br>Points are normalized (0-1) across the panel.';
   container.appendChild(info);
 
+  const info2 = document.createElement('div');
+  info2.style.marginTop = '4px';
+  info2.style.fontSize = '12px';
+  info2.style.lineHeight = '1.5';
+  info2.style.color = '#c7cedd';
+  info2.textContent = 'Left click on the curve to add new point, and right click on the point to delete it.';
+  container.appendChild(info2);
+
   folder.domElement.appendChild(container);
   curveUI.canvas = canvas;
   curveUI.ctx = canvas.getContext('2d');
@@ -721,13 +729,27 @@ function addCurvePanel(folder) {
   pruneEmptyLabel(folder);
 
   const onPointerDown = (e) => {
+    e.preventDefault();
     const pos = getUIPos(e);
     const pts = getDisplayPoints().map(worldToUI);
     const hit = pts.findIndex(p => distance2(p, pos) < 15 * 15);
     if (hit >= 0) {
+      if (e.button === 2) {
+        removeControlPoint(hit);
+        onCurvePointChanged();
+        renderCurveUI();
+        return;
+      }
       curveUI.dragging = hit;
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp, { once: true });
+      return;
+    }
+    if (e.button === 0) {
+      const world = uiToWorld(pos);
+      addControlPoint(world);
+      onCurvePointChanged();
+      renderCurveUI();
     }
   };
 
@@ -747,6 +769,7 @@ function addCurvePanel(folder) {
   };
 
   canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
   renderCurveUI();
 }
 
@@ -878,4 +901,16 @@ function clampAndOrderPoints() {
     controlPoints[i].x = THREE.MathUtils.clamp(controlPoints[i].x, prev, next);
     controlPoints[i].z = THREE.MathUtils.clamp(controlPoints[i].z, 0, 1);
   }
+}
+
+function addControlPoint(world) {
+  controlPoints.push(new THREE.Vector3(world.x, 0, world.z));
+  controlPoints.sort((a, b) => a.x - b.x);
+  clampAndOrderPoints();
+}
+
+function removeControlPoint(index) {
+  if (index <= 0 || index >= controlPoints.length - 1) return;
+  if (controlPoints.length <= 2) return;
+  controlPoints.splice(index, 1);
 }
