@@ -6,6 +6,15 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import html2canvas from 'html2canvas';
+import {
+  World,
+  Body,
+  Box as CannonBox,
+  Vec3,
+  Quaternion as CannonQuat,
+  Material as CannonMaterial,
+  ContactMaterial
+} from 'cannon-es';
 import GUI from 'lil-gui';
 
 const root = document.getElementById('app');
@@ -106,6 +115,16 @@ const pointer = new THREE.Vector2();
 const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 let isDraggingAttractor = false;
 
+let physicsWorld = null;
+let physicsReady = false;
+let simulatePhysics = false;
+let physicsGroundMaterial;
+let physicsBrickMaterial;
+let physicsContact;
+const physicsBodies = [];
+const clock = new THREE.Clock();
+let lastTime = 0;
+
 const controlPoints = [
   new THREE.Vector3(0.1, 0, 0.45),
   new THREE.Vector3(0.32, 0, 0.55),
@@ -182,6 +201,10 @@ vfxFolder.close();
 const exportFolder = gui.addFolder('Export');
 exportFolder.add({ exportObj }, 'exportObj').name('Export .obj');
 exportFolder.add({ snapshot }, 'snapshot').name('Snapshot');
+
+const simFolder = gui.addFolder('Simulation');
+simFolder.add({ start: startCollapse }, 'start').name('Start Collapse');
+simFolder.add({ reset: resetWall }, 'reset').name('Reset Wall');
 
 function onCurvePointChanged() {
   clampAndOrderPoints();
@@ -329,6 +352,7 @@ function clearBricks() {
     });
   });
   bricksMeta = [];
+  clearPhysicsBodies();
 }
 
 function paintGeometry(geometry) {
@@ -406,7 +430,11 @@ function rebuildWall() {
       brick.quaternion.copy(quaternion);
 
       brickGroup.add(brick);
-      bricksMeta.push({ object: brick, glow, row, column, curveT: u });
+      const meta = { object: brick, glow, row, column, curveT: u, dims: { x: brickLength, y: brickHeight, z: params.wallWidth } };
+      bricksMeta.push(meta);
+      if (simulatePhysics) {
+        addPhysicsBody(meta);
+      }
     }
   }
 
@@ -565,6 +593,17 @@ function animateVfx() {
   bloomPass.strength = vfxParams.bloomStrength;
   bloomPass.threshold = vfxParams.bloomThreshold;
   bloomPass.radius = vfxParams.bloomRadius;
+
+  if (simulatePhysics && physicsWorld) {
+    const delta = clock.getDelta();
+    physicsWorld.step(1 / 60, delta, 3);
+    bricksMeta.forEach(meta => {
+      if (meta.body) {
+        meta.object.position.copy(meta.body.position);
+        meta.object.quaternion.copy(meta.body.quaternion);
+      }
+    });
+  }
 }
 
 function updateBrickColors(meta, pulse = 0, vfxActive = false) {
@@ -690,6 +729,94 @@ function snapshot() {
     link.download = 'brick_wall_snapshot.png';
     link.click();
   });
+}
+
+function initPhysics() {
+  physicsWorld = new World();
+  physicsWorld.gravity.set(0, -25.9, 0);
+  physicsGroundMaterial = new CannonMaterial('ground');
+  physicsBrickMaterial = new CannonMaterial('brick');
+  physicsContact = new ContactMaterial(physicsGroundMaterial, physicsBrickMaterial, {
+    friction: 0.5,
+    restitution: 0.05
+  });
+  physicsWorld.addContactMaterial(physicsContact);
+
+  const groundBody = new Body({
+    mass: 0,
+    shape: new CannonBox(new Vec3(250, 0.1, 250)),
+    material: physicsGroundMaterial
+  });
+  groundBody.position.set(0, -0.05, 0);
+  physicsWorld.addBody(groundBody);
+  physicsReady = true;
+}
+
+function clearPhysicsBodies() {
+  if (!physicsWorld) return;
+  physicsBodies.forEach(body => physicsWorld.removeBody(body));
+  physicsBodies.length = 0;
+  bricksMeta.forEach(meta => { meta.body = null; });
+}
+
+function addPhysicsBody(meta) {
+  if (!physicsReady) initPhysics();
+  const { x, y, z } = meta.dims;
+  const shape = new CannonBox(new Vec3(x / 2, y / 2, z / 2));
+  const body = new Body({
+    mass: 1,
+    shape,
+    position: new Vec3(meta.object.position.x, meta.object.position.y, meta.object.position.z),
+    quaternion: new CannonQuat(meta.object.quaternion.x, meta.object.quaternion.y, meta.object.quaternion.z, meta.object.quaternion.w),
+    material: physicsBrickMaterial,
+    allowSleep: false,
+    linearDamping: 0.007,
+    angularDamping: 0.0035
+  });
+  physicsWorld.addBody(body);
+  physicsBodies.push(body);
+  meta.body = body;
+}
+
+function startCollapse() {
+  simulatePhysics = true;
+  clearPhysicsBodies();
+  if (!physicsReady) initPhysics();
+  bricksMeta.forEach(meta => addPhysicsBody(meta));
+
+  const maxRow = Math.max(...bricksMeta.map(m => m.row));
+  const attractorPos = attractor.position.clone();
+  const influenceRadius = Math.max(params.wallLength * 0.35, 1.5);
+
+  bricksMeta.forEach(meta => {
+    if (!meta.body) return;
+    const dist = meta.object.position.distanceTo(attractorPos);
+    const proximity = THREE.MathUtils.clamp(1 - dist / influenceRadius, 0, 1);
+    const proxWeight = Math.pow(proximity, 2.6);
+    const rowFactor = maxRow > 0 ? meta.row / maxRow : 0;
+    const topBias = proxWeight * 0.95 + rowFactor * 0.45;
+    const lateral = (0.05 + 0.15 * proxWeight) * 1.6 * 1.7;
+    const downImpulse = (0.4 + 6.0 * topBias) * 2.0 * 1.15 * 2.15625 * 1.18965;
+    const impulse = new Vec3(
+      (Math.random() - 0.5) * lateral,
+      -downImpulse,
+      (Math.random() - 0.5) * lateral
+    );
+    meta.body.applyImpulse(impulse, meta.body.position);
+    const ang = new Vec3(
+      (Math.random() - 0.5) * 4 * 1.15,
+      (Math.random() - 0.5) * 4 * 1.15,
+      (Math.random() - 0.5) * 4 * 1.15
+    );
+    meta.body.angularVelocity = ang;
+  });
+  lastTime = clock.getElapsedTime();
+}
+
+function resetWall() {
+  simulatePhysics = false;
+  clearPhysicsBodies();
+  rebuildWall();
 }
 
 function addCurvePanel(folder) {
