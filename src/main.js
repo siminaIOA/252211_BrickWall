@@ -18,6 +18,9 @@ import {
 } from 'cannon-es';
 import GUI from 'lil-gui';
 
+// Expose a build identifier to help bust caches on static hosting
+window.__BRICK_WALL_BUILD__ = '2025-11-25-preview';
+
 const root = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
