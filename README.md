@@ -5,11 +5,14 @@ This project renders a fully parametric brick wall in the browser using modern W
 ## Features
 - Three.js scene with ACES tone mapping, high-resolution shadows, and multiple lights for studio-style illumination.
 - Parametric wall controls for brick length, wall size, thickness, height, gaps (vertical and horizontal), and a falloff slider tied to an attractor point.
-- Interactive Catmull-Rom curve editor canvas (add/move/delete points) so the wall path stays in sync with the UI spline.
+- Curve Control Panel with selectable path types:
+  - Catmull-Rom spline (add/move/delete points).
+  - Polyline with draggable points (add/remove anywhere along a segment) for sharp interior corners.
 - Procedural brick instancing with toon shading, vertex-colored gradients, and baked brick/bump textures for readability.
 - Attractor-driven removal workflow (never touches ground row) plus physics-based collapse simulation (cannon-es) with start/reset controls.
 - Exports: OBJ and PLY with baked vertex colors/gradient; Snapshot captures the full app view (UI + scene) to PNG.
-- GitHub Pages live demo: https://siminaioa.github.io/252211_BrickWall/
+- GitHub Pages live demo (main): https://siminaioa.github.io/252211_BrickWall/
+- Preview deploy workflow: pushes from `feature/preview-share` build to `gh-pages-preview` for a separate preview link.
 
 ## Getting Started
 1. Install dependencies: `npm install` (installs `three`, `lil-gui`, and `vite`).
@@ -19,13 +22,18 @@ This project renders a fully parametric brick wall in the browser using modern W
 
 ## Controls
 - **Wall Parameters** (sliders): brick length, wall length/height/width, gap size, row count, and `Falloff` for the attractor.
-- **Curve Control**: canvas editor with draggable points (add via left-click, delete via right-click) defining the Catmull-Rom wall path the bricks snap to.
+- **Curve Control Panel**: choose Catmull-Rom (add/move/delete points) or Polyline (add/delete/move points on any segment) to shape the wall path.
 - **Viewport**: use mouse/touch with OrbitControls (LMB orbit, RMB pan, scroll to dolly).
 - **Attractor Sphere**: visualizes where the falloff is evaluated; the `Falloff` slider scales it and dictates how many top-down bricks stay hidden.
 - **Simulation**: start/reset collapse; bricks become rigid bodies and fall based on proximity/top-row bias.
 - **Export**: OBJ/PLY with vertex colors baked; Snapshot saves a PNG of the scene + UI.
 
 ## Deployment
-- Build locally: `npm run build` (outputs to `dist/`).
-- Serve the GitHub Pages bundle from the build artifacts (gh-pages branch tracks `index.html` + `assets/` at repo root).
-- To redeploy: `npm run build`, copy `dist/index.html` to repo root, copy `dist/assets` to root `assets/`, commit to `gh-pages`, and push. Live demo: https://siminaioa.github.io/252211_BrickWall/
+- **Local build**: `npm run build` (outputs to `dist/` with relative asset paths).
+- **Preview deployment (branch)**: pushing to `feature/preview-share` triggers `.github/workflows/preview-pages.yml`, which builds and publishes `dist/` to `gh-pages-preview` (keeps `main`/`gh-pages` untouched). Point a Pages source or secondary host at `gh-pages-preview` for the preview link.
+- **Public GitHub Pages (main demo)**:
+  1. Ensure you are on `gh-pages` (or merge `main` into it if desired).
+  2. `npm run build`.
+  3. Copy `dist/index.html` to repo root and `dist/assets` to root `assets/`.
+  4. Commit and push `gh-pages`.
+  5. Live demo: https://siminaioa.github.io/252211_BrickWall/
