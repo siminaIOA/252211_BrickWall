@@ -126,13 +126,27 @@ const physicsBodies = [];
 const clock = new THREE.Clock();
 let lastTime = 0;
 
-const controlPoints = [
-  new THREE.Vector3(0.1, 0, 0.45),
-  new THREE.Vector3(0.32, 0, 0.55),
-  new THREE.Vector3(0.64, 0, 0.42),
-  new THREE.Vector3(0.9, 0, 0.58)
-];
-let scaledControlPoints = controlPoints.map(pt => pt.clone());
+const curveState = {
+  mode: 'catmullrom',
+  points: {
+    catmullrom: [
+      new THREE.Vector3(0.1, 0, 0.45),
+      new THREE.Vector3(0.32, 0, 0.55),
+      new THREE.Vector3(0.64, 0, 0.42),
+      new THREE.Vector3(0.9, 0, 0.58)
+    ],
+    polyline: [
+      new THREE.Vector3(0.08, 0, 0.2),
+      new THREE.Vector3(0.32, 0, 0.82),
+      new THREE.Vector3(0.64, 0, 0.22),
+      new THREE.Vector3(0.92, 0, 0.65)
+    ]
+  }
+};
+const curveStyles = {
+  catmullrom: { stroke: '#3ecaff', point: '#6fb2ff' },
+  polyline: { stroke: '#3a8dff', point: '#3a8dff' }
+};
 const curveBounds = { xMin: 0, xMax: 1, zMin: 0, zMax: 1 };
 const curveUI = { canvas: null, ctx: null, padding: 16, width: 260, height: 260, dragging: null };
 const controlPointHelpers = [];
@@ -153,7 +167,7 @@ scene.add(attractor);
 const params = {
   brickLength: 0.6,
   wallLength: 8,
-  wallWidth: 0.35,
+  wallWidth: 0.25,
   wallHeight: 3,
   gap: 0.0,
   rows: 10,
@@ -175,7 +189,7 @@ const gui = new GUI({ title: 'Parametric Brick Wall' });
 const wallFolder = gui.addFolder('Wall Parameters');
 wallFolder.add(params, 'brickLength', 0.2, 1.2, 0.02).name('Brick Length').onChange(rebuildWall);
 wallFolder.add(params, 'wallLength', 2, 20, 0.1).name('Wall Length').onChange(rebuildWall);
-wallFolder.add(params, 'wallWidth', 0.2, 0.8, 0.01).name('Wall Width').onChange(rebuildWall);
+wallFolder.add(params, 'wallWidth', 0.2, 0.4, 0.01).name('Wall Width').onChange(rebuildWall);
 wallFolder.add(params, 'wallHeight', 1, 6, 0.1).name('Wall Height').onChange(onWallHeightChange);
 wallFolder.add(params, 'gap', 0.0, 0.15, 0.005).name('Vertical Gap').onChange(rebuildWall);
 wallFolder.add(params, 'horizontalGap', 0.0, 0.15, 0.005).name('Horizontal Gap').onChange(rebuildWall);
@@ -186,8 +200,12 @@ wallFolder.add(params, 'falloff', 0, 1, 0.01).name('Falloff').onChange(() => {
 });
 wallFolder.open();
 
-const curveFolder = gui.addFolder('Catmull-Rom Curve');
+const curveFolder = gui.addFolder('Curve Control Panel');
 curveFolder.domElement.style.marginTop = '8px';
+curveFolder.add(curveState, 'mode', {
+  'Catmull-Rom Curve': 'catmullrom',
+  'Polyline (4 corners)': 'polyline'
+}).name('Curve Type').onChange(onCurveModeChange);
 addCurvePanel(curveFolder);
 curveFolder.open();
 
@@ -208,8 +226,26 @@ const simFolder = gui.addFolder('Simulation');
 simFolder.add({ start: startCollapse }, 'start').name('Start Collapse');
 simFolder.add({ reset: resetWall }, 'reset').name('Reset Wall');
 
-function onCurvePointChanged() {
-  clampAndOrderPoints();
+function getActiveControlPoints() {
+  return curveState.points[curveState.mode];
+}
+
+function getCurveStyle() {
+  return curveStyles[curveState.mode] || curveStyles.catmullrom;
+}
+
+function onCurveModeChange() {
+  curveUI.dragging = null;
+  const isCatmull = curveState.mode === 'catmullrom';
+  clampAndOrderPoints(getActiveControlPoints(), { sort: isCatmull });
+  updateCurveInfoText();
+  onCurvePointChanged();
+}
+
+function onCurvePointChanged(options = {}) {
+  const { dragging = false } = options;
+  const isCatmull = curveState.mode === 'catmullrom';
+  clampAndOrderPoints(getActiveControlPoints(), { sort: isCatmull && !dragging });
   updatePointHelpers();
   rebuildWall();
 }
@@ -325,20 +361,31 @@ function createBrickBumpTexture() {
 }
 
 function buildCurve() {
-  clampAndOrderPoints();
-  const spanX = params.wallLength * 0.9;
-  const spanZ = params.wallLength * 0.35;
-  const basePoints = controlPoints.map(pt => {
+  const points = getActiveControlPoints();
+  clampAndOrderPoints(points);
+  // Keep world mapping square so the 3D wall matches the proportions shown in the UI panel.
+  const span = params.wallLength * 0.9;
+  const basePoints = points.map(pt => {
     const u = THREE.MathUtils.clamp(pt.x, 0, 1);
     const v = THREE.MathUtils.clamp(pt.z, 0, 1);
-    return new THREE.Vector3((u - 0.5) * spanX, 0, (0.5 - v) * spanZ);
+    return new THREE.Vector3((u - 0.5) * span, 0, (0.5 - v) * span);
   });
   const centroid = basePoints.reduce((acc, v) => acc.add(v), new THREE.Vector3()).multiplyScalar(1 / basePoints.length);
-  const baseCurve = new THREE.CatmullRomCurve3(basePoints, false, 'catmullrom', 0.5);
+  const makeCurve = (pts) => {
+    if (curveState.mode === 'polyline') {
+      const path = new THREE.CurvePath();
+      for (let i = 0; i < pts.length - 1; i += 1) {
+        path.add(new THREE.LineCurve3(pts[i].clone(), pts[i + 1].clone()));
+      }
+      return path;
+    }
+    return new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+  };
+  const baseCurve = makeCurve(basePoints);
   const baseLength = Math.max(baseCurve.getLength(), 0.0001);
   const scale = params.wallLength / baseLength;
-  scaledControlPoints = basePoints.map(pt => pt.clone().sub(centroid).multiplyScalar(scale).add(centroid));
-  return new THREE.CatmullRomCurve3(scaledControlPoints, false, 'catmullrom', 0.5);
+  const scaledPoints = basePoints.map(pt => pt.clone().sub(centroid).multiplyScalar(scale).add(centroid));
+  return makeCurve(scaledPoints);
 }
 
 function refreshCurveLine(curve) {
@@ -944,12 +991,16 @@ function addCurvePanel(folder) {
   folder.domElement.appendChild(container);
   curveUI.canvas = canvas;
   curveUI.ctx = canvas.getContext('2d');
+  curveUI.infoNode = info;
+  curveUI.info2Node = info2;
 
   pruneEmptyLabel(folder);
+  updateCurveInfoText();
 
   const onPointerDown = (e) => {
     e.preventDefault();
     const pos = getUIPos(e);
+    const isCatmull = curveState.mode === 'catmullrom';
     const pts = getDisplayPoints().map(worldToUI);
     const hit = pts.findIndex(p => distance2(p, pos) < 15 * 15);
     if (hit >= 0) {
@@ -976,14 +1027,16 @@ function addCurvePanel(folder) {
     if (curveUI.dragging === null) return;
     const pos = getUIPos(e);
     const world = uiToWorld(pos);
-    controlPoints[curveUI.dragging].x = world.x;
-    controlPoints[curveUI.dragging].z = world.z;
-    onCurvePointChanged();
+    const points = getActiveControlPoints();
+    points[curveUI.dragging].x = world.x;
+    points[curveUI.dragging].z = world.z;
+    onCurvePointChanged({ dragging: true });
     renderCurveUI();
   };
 
   const onPointerUp = () => {
     curveUI.dragging = null;
+    onCurvePointChanged();
     window.removeEventListener('pointermove', onPointerMove);
   };
 
@@ -992,8 +1045,19 @@ function addCurvePanel(folder) {
   renderCurveUI();
 }
 
+function updateCurveInfoText() {
+  if (!curveUI.infoNode || !curveUI.info2Node) return;
+  const isCatmull = curveState.mode === 'catmullrom';
+  curveUI.infoNode.innerHTML = isCatmull
+    ? 'Drag points to bend the path.<br>Points are normalized (0-1) across the panel.'
+    : 'Drag the blue points to set sharp corners.<br>Points are normalized (0-1) across the panel.';
+  curveUI.info2Node.textContent = isCatmull
+    ? 'Left click on the curve to add new point, and right click on the point to delete it.'
+    : 'Left click to add a point; right click a point to delete it.';
+}
+
 function getDisplayPoints() {
-  return controlPoints;
+  return getActiveControlPoints();
 }
 
 function getUIPos(event) {
@@ -1053,12 +1117,13 @@ function renderCurveUI() {
   ctx.restore();
 
   const nodes = getDisplayPoints();
+  const style = getCurveStyle();
   const pts = nodes.map(worldToUI);
   const curvePts = buildUICurve(nodes);
 
   // curve line (spline)
   ctx.save();
-  ctx.strokeStyle = '#3ecaff';
+  ctx.strokeStyle = style.stroke;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   if (curvePts.length > 0) {
@@ -1073,7 +1138,7 @@ function renderCurveUI() {
   // nodes
   pts.forEach((p, idx) => {
     ctx.save();
-    ctx.fillStyle = idx === curveUI.dragging ? '#ff6b4a' : '#6fb2ff';
+    ctx.fillStyle = idx === curveUI.dragging ? '#ff6b4a' : style.point;
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -1093,6 +1158,9 @@ function distance2(a, b) {
 function buildUICurve(nodes) {
   if (!nodes.length) return [];
   if (nodes.length === 1) return [worldToUI(nodes[0])];
+  if (curveState.mode === 'polyline') {
+    return nodes.map(worldToUI);
+  }
   const curve = new THREE.CatmullRomCurve3(
     nodes.map(n => new THREE.Vector3(n.x, 0, n.z)),
     false,
@@ -1112,24 +1180,69 @@ function pruneEmptyLabel(folder) {
   requestAnimationFrame(remove);
 }
 
-function clampAndOrderPoints() {
+function clampAndOrderPoints(points = getActiveControlPoints(), { sort } = {}) {
+  const isCatmull = curveState.mode === 'catmullrom';
+  const shouldSort = sort !== undefined ? sort : isCatmull;
   const eps = 0.02;
-  for (let i = 0; i < controlPoints.length; i += 1) {
-    const prev = i === 0 ? 0 : controlPoints[i - 1].x + eps;
-    const next = i === controlPoints.length - 1 ? 1 : controlPoints[i + 1].x - eps;
-    controlPoints[i].x = THREE.MathUtils.clamp(controlPoints[i].x, prev, next);
-    controlPoints[i].z = THREE.MathUtils.clamp(controlPoints[i].z, 0, 1);
+  if (shouldSort) points.sort((a, b) => a.x - b.x);
+  for (let i = 0; i < points.length; i += 1) {
+    if (isCatmull) {
+      const prev = i === 0 ? 0 : points[i - 1].x + eps;
+      const next = i === points.length - 1 ? 1 : points[i + 1].x - eps;
+      points[i].x = THREE.MathUtils.clamp(points[i].x, prev, next);
+    } else {
+      // Polyline endpoints can cross to allow interior sharp angles.
+      points[i].x = THREE.MathUtils.clamp(points[i].x, 0, 1);
+    }
+    points[i].z = THREE.MathUtils.clamp(points[i].z, 0, 1);
   }
 }
 
 function addControlPoint(world) {
-  controlPoints.push(new THREE.Vector3(world.x, 0, world.z));
-  controlPoints.sort((a, b) => a.x - b.x);
-  clampAndOrderPoints();
+  const points = getActiveControlPoints();
+  const isCatmull = curveState.mode === 'catmullrom';
+  const newPoint = new THREE.Vector3(world.x, 0, world.z);
+  if (!points.length) {
+    points.push(newPoint);
+  } else if (isCatmull) {
+    points.push(newPoint);
+    points.sort((a, b) => a.x - b.x);
+  } else {
+    const insertIndex = findPolylineInsertIndex(points, newPoint);
+    points.splice(insertIndex, 0, newPoint);
+  }
+  clampAndOrderPoints(points, { sort: isCatmull });
 }
 
 function removeControlPoint(index) {
-  if (index <= 0 || index >= controlPoints.length - 1) return;
-  if (controlPoints.length <= 2) return;
-  controlPoints.splice(index, 1);
+  const points = getActiveControlPoints();
+  if (index <= 0 || index >= points.length - 1) return;
+  if (points.length <= 2) return;
+  points.splice(index, 1);
+}
+
+function findPolylineInsertIndex(points, newPoint) {
+  if (points.length < 2) return points.length;
+  let bestIndex = 0;
+  let bestDist2 = Infinity;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    const vx = b.x - a.x;
+    const vz = b.z - a.z;
+    const wx = newPoint.x - a.x;
+    const wz = newPoint.z - a.z;
+    const denom = vx * vx + vz * vz || 0.00001;
+    const t = THREE.MathUtils.clamp((wx * vx + wz * vz) / denom, 0, 1);
+    const cx = a.x + vx * t;
+    const cz = a.z + vz * t;
+    const dx = newPoint.x - cx;
+    const dz = newPoint.z - cz;
+    const dist2 = dx * dx + dz * dz;
+    if (dist2 < bestDist2) {
+      bestDist2 = dist2;
+      bestIndex = i;
+    }
+  }
+  return bestIndex + 1;
 }
